@@ -1,0 +1,104 @@
+# You can override the included template(s) by including variable overrides
+# SAST customization: https://docs.gitlab.com/ee/user/application_security/sast/#customizing-the-sast-settings
+# Secret Detection customization: https://docs.gitlab.com/ee/user/application_security/secret_detection/pipeline/#customization
+# Dependency Scanning customization: https://docs.gitlab.com/ee/user/application_security/dependency_scanning/#customizing-the-dependency-scanning-settings
+# Container Scanning customization: https://docs.gitlab.com/ee/user/application_security/container_scanning/#customizing-the-container-scanning-settings
+# Note that environment variables can be set in several places
+# See https://docs.gitlab.com/ee/ci/variables/#cicd-variable-precedence
+variables:
+# environments variables
+  IMAGE_VERSION: 1.0
+  DOCKERFILE_IMAGE: docker.io/amazoncorretto:17-alpine3.19-jdk
+
+
+
+include:
+- template: Security/SAST.gitlab-ci.yml
+- template: Security/Dependency-Scanning.gitlab-ci.yml
+- template: Security/Secret-Detection.gitlab-ci.yml
+
+
+stages:
+  - test
+  - unit-test
+  - coverage
+  - build
+  - build-image
+  - deploy
+  
+workflow:
+  rules:
+    - changes:
+        - '**/*'  # by default all files
+        - '!README.md'  # Exclude README.md from changes
+
+unit-test:
+  stage: unit-test
+  image: maven:3.9.7-amazoncorretto-17
+  script:
+    - cd sourceCode
+    - 'mvn clean test'
+    - ls -la target/surefire-reports
+  artifacts:
+    paths:
+      - sourceCode/target/surefire-reports/TEST-*.xml
+    reports:
+      junit:
+        - sourceCode/target/surefire-reports/TEST-*
+
+coverage-test:
+  stage: coverage
+  image: maven:3.9.7-amazoncorretto-17
+  script:
+    - cd sourceCode
+    - 'mvn clean test'
+    - ls -la target/site/jacoco/
+    - coverage=$(cat target/site/jacoco/index.html | grep -o 'Total[^%]*%' | sed 's/<.*>/ /; s/Total/Total:/' | grep -o '[0-9]\{1,3\}')
+    - echo "Coverage percent is $coverage%"
+    - if [ $coverage -lt 30 ]; then exit 1; fi
+  artifacts:
+    paths:
+      - sourceCode/target/site/jacoco/index.html
+      - sourceCode/target/site/jacoco/*.xml
+        
+compile:
+  stage: build
+  image: maven:3.9.7-amazoncorretto-17     
+  script: 
+    - cd sourceCode
+    - 'mvn verify'    
+  artifacts:
+    paths:
+      - sourceCode/target/*.jar
+    
+
+build-push-image:
+  stage: build-image
+  image: quay.io/podman/stable:latest
+  script:
+    - cp sourceCode/target/*.jar integrationDeployment/
+    - podman login -u ${REGISTRY_USER} -p ${REGISTRY_PASS} ${REGISTRY_URL}
+    - podman build -t ${NAMESPACE}:${IMAGE_VERSION} -f integrationDeployment/Dockerfile --build-arg CONTAINER=${DOCKERFILE_IMAGE}
+    - podman tag ${NAMESPACE}:${IMAGE_VERSION} ${REGISTRY_URL}/${REGISTRY_USER}/${NAMESPACE}:${IMAGE_VERSION}
+    - podman push ${REGISTRY_URL}/${REGISTRY_USER}/${NAMESPACE}:${IMAGE_VERSION}  
+    
+    
+deploy-to-cluster:
+  stage: deploy
+  image: 
+    name: bitnami/kubectl
+    entrypoint: [""]
+  script: 
+    # Conexion a kubernetes
+    - mkdir /tmp/kube
+    - cp ${KUBECONFIG} /tmp/kube/config
+    - export KUBECONFIG=/tmp/kube/config
+    # Asignar el valor de las variables de CI/CD hacia el archivo de manifiesto deployment
+    - sed -i "s/\${USER_DB}/$USER_DB/" integrationDeployment/manifests/deployment.yml
+    - sed -i "s/\${PASS_DB}/$PASS_DB/" integrationDeployment/manifests/deployment.yml
+    # Crear componentes de kuberentes
+    - kubectl config current-context  
+    - kubectl -n ${NAMESPACE} get configmap properties-cm || kubectl -n ${NAMESPACE} create configmap properties-cm --from-file=integrationDeployment/configuration/devConfig
+    - kubectl apply -f integrationDeployment/manifests/deployment.yml
+    - kubectl -n ${NAMESPACE} rollout restart deployment/${DEPLOYMENT}
+      

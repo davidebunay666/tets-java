@@ -1,0 +1,99 @@
+apiVersion: v1
+kind: Secret
+metadata:
+  name: connectiobdb-secret
+  namespace: test-java
+type: Opaque
+data:
+  user: ${USER_DB}
+  password: ${PASS_DB}  
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: test
+  namespace: test-java
+  labels:
+    app: test
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: test
+  template:
+    metadata:
+      labels:
+        app: test
+    spec:
+      volumes:
+        - name: vol-configmap
+          configMap:
+            name: properties-cm
+      containers:
+      - name: test
+        image: davidbunay66/test-java:1.0
+        imagePullPolicy: Always
+        ports:
+        - containerPort: 8000
+        env:
+          - name: USERNAME_DB
+            valueFrom:
+              secretKeyRef:
+                name: connectiobdb-secret
+                key: user 
+          - name: PASSWORD_DB
+            valueFrom:
+              secretKeyRef:
+                name: connectiobdb-secret
+                key: password                
+        readinessProbe:
+          httpGet:
+            path: /api/users
+            port: 8000
+          initialDelaySeconds: 20
+          periodSeconds: 25
+          timeoutSeconds: 5
+          successThreshold: 1
+          failureThreshold: 3  
+        volumeMounts:
+          - name: vol-configmap
+            mountPath: /deployments/data
+        
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: test
+  namespace: test-java
+  labels:
+    app: test
+spec:
+  selector:
+    app: test
+  ports:
+    - protocol: TCP
+      port: 8000
+      targetPort: 8000
+  type: LoadBalancer
+  
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: test-hpa
+  namespace: test-java
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: test
+  minReplicas: 2
+  maxReplicas: 5
+  metrics:
+  - type: Resource
+    resource:
+      name: cpu
+      target:
+        type: Utilization
+        averageUtilization: 60
