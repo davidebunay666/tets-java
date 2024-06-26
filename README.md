@@ -35,6 +35,9 @@ The CD process includes one stage:
 - **configMap**: Created from files located in `integrationDeployment/configuration/devConfig`.
 
 ## Usage
+
+The ci/cd pipelines is executed on public  gitlab repository
+[https://gitlab.com/davidebunay666/tets-devops/-/pipelines](https://gitlab.com/davidebunay666/tets-devops/-/pipelines)
 The application image is deployed to a public Docker Hub repository on each commit to the main branch. You can pull the image using:
 **docker pull davidbunay66/test-java:1.0**
 
